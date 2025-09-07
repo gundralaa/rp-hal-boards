@@ -1,0 +1,54 @@
+;
+; Copyright (c) 2023 Raspberry Pi (Trading) Ltd.
+;
+; SPDX-License-Identifier: BSD-3-Clause
+;
+
+.program encoder
+
+.origin 0
+
+; 00 state
+    jmp update    ; read 00
+    jmp decrement ; read 01
+    jmp increment ; read 10
+    jmp update    ; read 11
+
+; 01 state
+    jmp increment ; read 00
+    jmp update    ; read 01
+    jmp update    ; read 10
+    jmp decrement ; read 11
+
+; 10 state
+    jmp decrement ; read 00
+    jmp update    ; read 01
+    jmp update    ; read 10
+    jmp increment ; read 11
+
+; 11 state
+    jmp update    ; read 00
+    jmp increment ; read 01
+
+decrement:
+    jmp y--, update ; read 10
+
+.wrap_target
+update:
+    mov isr, y      ; read 11
+    push noblock
+
+sample_pins:
+    out isr, 2
+    in pins, 2
+
+    mov osr, isr
+    mov pc, isr
+
+increment:
+    mov y, ~y
+    jmp y--, increment_cont
+    
+increment_cont:
+    mov y, ~y
+.wrap
