@@ -131,8 +131,8 @@ fn main() -> ! {
         let mut i = 0;
 
         if num == 0 {
-            buffer[i] = b'0';
-            i += 1;
+            buffer[9] = b'0';
+            i = 1;
         } else {
             while num > 0 && i < 10 {
                 buffer[9 - i] = b'0' + (num % 10) as u8;
