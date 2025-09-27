@@ -6,9 +6,11 @@
 #![no_std]
 #![no_main]
 
+
 use defmt::info;
 use defmt_rtt as _;
 use panic_halt as _;
+
 use pololu_3pi_2040::entry;
 
 use embedded_hal::digital::OutputPin;
@@ -16,6 +18,7 @@ use pio::{
     Instruction, InstructionOperands, MovDestination, MovOperation, MovSource, OutDestination,
 };
 use pio_proc::pio_file;
+
 use pololu_3pi_2040::hal;
 use pololu_3pi_2040::hal::pio::{PIOBuilder, Rx, ValidStateMachine};
 use pololu_3pi_2040::hal::prelude::*;
@@ -27,39 +30,44 @@ fn read_qtr_counts<T: ValidStateMachine>(rx: &mut Rx<T>) -> [u32; 5] {
     let mut line_sensors = [TIMEOUT; 5];
     let mut last_state = 0xFF_u8;
 
-    for _ in 0..1000 {
+    for i in 0..10000 {
         // Simple timeout with max iterations
         if let Some(data) = rx.read() {
             if data == 0xFFFFFFFF {
+                //info!("read success");
                 break; // End marker
             }
 
             let time_left = data & 0xFFFF;
-            let state = ((data >> 16) & 0x7F) as u8;
+            let state = ((data >> 16) & 0x1F) as u8;
             let new_zeros = last_state & !state;
+            
+            //info!("time left: {:08x}", time_left);
+            //info!("state: {:08x}", state);
+            //info!("trans: {:08x}", new_zeros);
 
             // Record discharge times for pins that just went LOW
-            if new_zeros & (1 << 2) != 0 {
+            if new_zeros & (1 << 0) != 0 {
                 line_sensors[4] = TIMEOUT - time_left;
             }
-            if new_zeros & (1 << 3) != 0 {
+            if new_zeros & (1 << 1) != 0 {
                 line_sensors[3] = TIMEOUT - time_left;
             }
-            if new_zeros & (1 << 4) != 0 {
+            if new_zeros & (1 << 2) != 0 {
                 line_sensors[2] = TIMEOUT - time_left;
             }
-            if new_zeros & (1 << 5) != 0 {
+            if new_zeros & (1 << 3) != 0 {
                 line_sensors[1] = TIMEOUT - time_left;
             }
-            if new_zeros & (1 << 6) != 0 {
+            if new_zeros & (1 << 4) != 0 {
                 line_sensors[0] = TIMEOUT - time_left;
             }
 
             last_state = state;
         }
-        cortex_m::asm::delay(100);
+        cortex_m::asm::delay(10);
     }
-
+    
     line_sensors
 }
 
@@ -67,9 +75,7 @@ fn read_qtr_counts<T: ValidStateMachine>(rx: &mut Rx<T>) -> [u32; 5] {
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
-
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
-
     let clocks = hal::clocks::init_clocks_and_plls(
         pololu_3pi_2040::XOSC_CRYSTAL_FREQ,
         pac.XOSC,
@@ -81,7 +87,6 @@ fn main() -> ! {
     )
     .ok()
     .unwrap();
-
     let sio = hal::Sio::new(pac.SIO);
     let pins = pololu_3pi_2040::Pins::new(
         pac.IO_BANK0,
@@ -89,14 +94,11 @@ fn main() -> ! {
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
-
-    // Configure and turn on the line emitter (critical for QTR sensors!)
-    let mut line_emitter = pins.line_emitter.into_push_pull_output();
-    line_emitter.set_high().unwrap();
-
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    // Prepare PIO
+    let mut line_emitter = pins.line_emitter.into_push_pull_output();
+    line_emitter.set_high().unwrap();
+    
     let (mut pio1, sm0, _, _, _) = pac.PIO1.split(&mut pac.RESETS);
     let program = pio_file!(
         "./examples/qtr_light.pio",
@@ -104,24 +106,14 @@ fn main() -> ! {
     );
     let installed = pio1.install(&program.program).unwrap();
 
-    // Configure all 7 sensor pins for PIO (pins 16-22) initially
-    let mut bump_right = pins.right_bump;
-    let mut bump_left = pins.left_bump;
-    let mut l5 = pins.line_5;
-    let mut l4 = pins.line_4;
-    let mut l3 = pins.line_3;
-    let mut l2 = pins.line_2;
-    let mut l1 = pins.line_1;
-
     // Base pin is GPIO16 (first sensor pin)
-    let base_pin = 16u8;
-
+    let base_pin = 18u8;
     let (mut sm, mut rx, _tx) = PIOBuilder::from_installed_program(installed)
-        .out_pins(base_pin, 7)
+        .out_pins(base_pin, 5)
         .in_pin_base(base_pin)
-        .in_shift_direction(hal::pio::ShiftDirection::Right)
-        .autopush(false)
-        .push_threshold(23) // Matches C code
+        .in_shift_direction(hal::pio::ShiftDirection::Left)
+        .autopush(true)
+        .push_threshold(21) // Matches C code
         .clock_divisor_fixed_point(15, 160) // Matches C code: 8 MHz
         .buffers(hal::pio::Buffers::OnlyRx) // CRITICAL: Join FIFOs to RX only like C code
         .build(sm0);
@@ -131,93 +123,71 @@ fn main() -> ! {
     // Give the sensors some time to stabilize
     delay.delay_ms(100);
 
+    let mut line_1 = pins.line_1;
+    let mut line_2 = pins.line_2;
+    let mut line_3 = pins.line_3;
+    let mut line_4 = pins.line_4;
+    let mut line_5 = pins.line_5;
+
     loop {
-        info!("Starting new QTR measurement");
-
-        // CRITICAL: Pre-charge the sensor capacitors by driving pins HIGH
-        // This matches the C code behavior in lines 55-56 and 66
-
-        // Configure pins as outputs and drive HIGH to charge capacitors
-        let mut pin16 = bump_right.into_push_pull_output();
-        let mut pin17 = bump_left.into_push_pull_output();
-        let mut pin18 = l5.into_push_pull_output();
-        let mut pin19 = l4.into_push_pull_output();
-        let mut pin20 = l3.into_push_pull_output();
-        let mut pin21 = l2.into_push_pull_output();
-        let mut pin22 = l1.into_push_pull_output();
-
-        // Drive all pins HIGH (charge phase)
-        pin16.set_high().unwrap();
-        pin17.set_high().unwrap();
-        pin18.set_high().unwrap();
-        pin19.set_high().unwrap();
-        pin20.set_high().unwrap();
-        pin21.set_high().unwrap();
-        pin22.set_high().unwrap();
-
-        // Critical 32μs delay to charge the capacitors (matches C code line 66)
-        delay.delay_us(32);
-
-        // Reconfigure pins back to PIO function
-        bump_right = pin16.reconfigure();
-        bump_left = pin17.reconfigure();
-        l5 = pin18.reconfigure();
-        l4 = pin19.reconfigure();
-        l3 = pin20.reconfigure();
-        l2 = pin21.reconfigure();
-        l1 = pin22.reconfigure();
-
-        // Clear FIFOs before starting
+        
         sm.clear_fifos();
 
-        // CRITICAL: Initialize Y register to 1023 using blocking execution (matches C code lines 79-84)
-        // mov osr, !null - loads 0xFFFFFFFF into OSR
+        // Charge the sensor capacitors
+        let mut _line_1 = line_1.into_push_pull_output();
+        let mut _line_2 = line_2.into_push_pull_output();
+        let mut _line_3 = line_3.into_push_pull_output();
+        let mut _line_4 = line_4.into_push_pull_output();
+        let mut _line_5 = line_5.into_push_pull_output();
 
-        sm.exec_instruction(Instruction {
-            operands: InstructionOperands::MOV {
-                destination: MovDestination::OSR,
-                op: MovOperation::Invert,
-                source: MovSource::NULL,
-            },
-            delay: 0,
-            side_set: None,
-        });
+        _line_1.set_high().unwrap();
+        _line_2.set_high().unwrap();
+        _line_3.set_high().unwrap();
+        _line_4.set_high().unwrap();
+        _line_5.set_high().unwrap();
 
-        // out y, 10 - moves lower 10 bits (1023) from OSR to Y register
-        sm.exec_instruction(Instruction {
-            operands: InstructionOperands::OUT {
-                destination: OutDestination::Y,
-                bit_count: 10,
-            },
-            delay: 0,
-            side_set: None,
-        });
+        // Wait for the capacitors to charge
+        delay.delay_us(32);
 
-        // mov osr, null - clears OSR to 0
-        sm.exec_instruction(Instruction {
-            operands: InstructionOperands::MOV {
-                destination: MovDestination::OSR,
-                op: MovOperation::None,
-                source: MovSource::NULL,
-            },
-            delay: 0,
-            side_set: None,
-        });
+        // Set the pins to floating input
+        let mut _line_1 = _line_1.into_floating_input();
+        let mut _line_2 = _line_2.into_floating_input();
+        let mut _line_3 = _line_3.into_floating_input();
+        let mut _line_4 = _line_4.into_floating_input();
+        let mut _line_5 = _line_5.into_floating_input();
+
+        sm.set_pindirs([
+            (base_pin, hal::pio::PinDir::Input),
+            (base_pin + 1, hal::pio::PinDir::Input),
+            (base_pin + 2, hal::pio::PinDir::Input),
+            (base_pin + 3, hal::pio::PinDir::Input),
+            (base_pin + 4, hal::pio::PinDir::Input),
+        ]);
 
         // Now start the properly initialized state machine
+        // Measure the discharge count
         let sm_running = sm.start();
 
-        // Wait for the measurement to complete
         delay.delay_ms(10);
 
         let counts = read_qtr_counts(&mut rx);
+        let mut avg_counts = [0; 5];
+        for i in 0..5 {
+            avg_counts[i] = (avg_counts[i] * (3) + counts[i] * (7)) / 10;
+        }
         info!(
             "QTR values: [L1:{}, L2:{}, L3:{}, L4:{}, L5:{}]",
-            counts[0], counts[1], counts[2], counts[3], counts[4]
+            avg_counts[0], avg_counts[1], avg_counts[2], avg_counts[3], avg_counts[4]
         );
 
         // Stop the state machine
         sm = sm_running.stop();
+        
+        line_1 = _line_1.reconfigure();
+        line_2 = _line_2.reconfigure();
+        line_3 = _line_3.reconfigure();
+        line_4 = _line_4.reconfigure();
+        line_5 = _line_5.reconfigure();
 
         delay.delay_ms(500);
     }
