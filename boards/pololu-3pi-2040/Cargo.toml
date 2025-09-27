@@ -37,6 +37,10 @@ defmt.workspace = true
 defmt-rtt.workspace = true
 panic-probe.workspace = true
 
+# IMU sensor drivers for examples
+lsm6dso = "0.2.0"
+lis3mdl = "0.1.0"
+
 [features]
 # This is the set of features we enable by default
 default = ["boot2", "rt", "critical-section-impl", "rom-func-cache"]
