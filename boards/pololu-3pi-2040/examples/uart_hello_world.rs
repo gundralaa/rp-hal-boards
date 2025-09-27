@@ -23,7 +23,7 @@ use pololu_3pi_2040::entry;
 use embedded_hal::digital::OutputPin;
 
 // UART traits
-use embedded_hal_nb::serial::Write;
+// use embedded_hal_nb::serial::Write; // Not needed for this example
 
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
@@ -105,7 +105,7 @@ fn main() -> ! {
     );
 
     // Make a UART on the given pins
-    let mut uart = hal::uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
+    let uart = hal::uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
         .enable(
             UartConfig::new(115200.Hz(), DataBits::Eight, None, StopBits::One),
             clocks.peripheral_clock.freq(),
@@ -131,8 +131,25 @@ fn main() -> ! {
         info!("LED on, sending message {}", counter);
         
         // Send hello world message
-        uart.write_full_blocking(b"Hello, World! ");
-        uart.write_full_blocking(counter.to_string().as_bytes());
+        uart.write_full_blocking(b"Hello, World! Counter: ");
+        
+        // Simple number formatting for no_std environment
+        let mut buffer = [0u8; 10];
+        let mut num = counter;
+        let mut i = 0;
+        
+        if num == 0 {
+            buffer[i] = b'0';
+            i += 1;
+        } else {
+            while num > 0 && i < 10 {
+                buffer[9 - i] = b'0' + (num % 10) as u8;
+                num /= 10;
+                i += 1;
+            }
+        }
+        
+        uart.write_full_blocking(&buffer[10-i..10]);
         uart.write_full_blocking(b" from Pololu 3pi 2040!\r\n");
         
         delay.delay_ms(500);
