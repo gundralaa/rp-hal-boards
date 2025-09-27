@@ -9,6 +9,8 @@
 //! * GPIO 29 - UART RX (in to the RP2040)
 //! * GPIO 25 - An LED we can blink (active high)
 //!
+//! UART Configuration: 115200 baud, 8 data bits, 1 stop bit, no parity
+//!
 //! See the `Cargo.toml` file for Copyright and license details.
 
 #![no_std]
@@ -105,7 +107,7 @@ fn main() -> ! {
     // Make a UART on the given pins
     let mut uart = hal::uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
         .enable(
-            UartConfig::new(9600.Hz(), DataBits::Eight, None, StopBits::One),
+            UartConfig::new(115200.Hz(), DataBits::Eight, None, StopBits::One),
             clocks.peripheral_clock.freq(),
         )
         .unwrap();
@@ -116,7 +118,7 @@ fn main() -> ! {
     // Send initial startup message
     uart.write_full_blocking(b"Pololu 3pi 2040 UART Hello World!\r\n");
     uart.write_full_blocking(b"Starting UART communication...\r\n");
-    uart.write_full_blocking(b"Baud rate: 9600\r\n");
+    uart.write_full_blocking(b"Baud rate: 115200\r\n");
     uart.write_full_blocking(b"TX: GPIO 28, RX: GPIO 29\r\n");
     uart.write_full_blocking(b"----------------------------------------\r\n");
 
