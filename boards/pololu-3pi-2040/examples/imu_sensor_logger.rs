@@ -2,14 +2,14 @@
 //!
 //! This application demonstrates how to read and log data from the onboard IMU sensors
 //! on the Pololu 3pi+ 2040 robot. The example reads acceleration and gyroscope data
-//! from the LSM6DSO sensor and magnetometer data from the LIS3MDL sensor, then logs
+//! from the LSM6DSO sensor and magnetometer data from the sensor, then logs
 //! all values periodically using defmt.
 //!
 //! ## Hardware Configuration
 //!
 //! The IMU sensors are connected via I2C:
-//! * GPIO 4 - I2C SDA (data line) - connected to both LSM6DSO and LIS3MDL
-//! * GPIO 5 - I2C SCL (clock line) - connected to both LSM6DSO and LIS3MDL
+//! * GPIO 4 - I2C SDA (data line) - connected to both LSM6DSO
+//! * GPIO 5 - I2C SCL (clock line) - connected to both LSM6DSO
 //! * GPIO 25 - LED indicator (blinks during operation)
 //!
 //! ## Sensors
@@ -17,7 +17,6 @@
 //! * **LSM6DSO**: STMicroelectronics 6-axis IMU providing:
 //!   - 3-axis accelerometer (±2g to ±16g selectable)
 //!   - 3-axis gyroscope (±125dps to ±2000dps selectable)
-//! * **LIS3MDL**: STMicroelectronics 3-axis magnetometer (±4gauss to ±16gauss selectable)
 //!
 //! ## I2C Configuration
 //!
@@ -40,9 +39,6 @@ use pololu_3pi_2040::entry;
 // GPIO traits
 use embedded_hal::digital::OutputPin;
 
-// I2C traits
-use embedded_hal::blocking::i2c::{Write, WriteRead};
-
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
 use panic_halt as _;
@@ -64,6 +60,8 @@ use fugit::RateExtU32;
 // For logging
 use defmt::*;
 use defmt_rtt as _;
+
+use lsm6dso::{self, AccelerometerOutput, AccelerometerScale, GyroscopeFullScale, GyroscopeOutput};
 
 /// Entry point to our bare-metal application.
 ///
@@ -130,52 +128,38 @@ fn main() -> ! {
 
     // Send initial startup message
     info!("Pololu 3pi+ 2040 IMU Sensor Logger");
-    info!("Initializing LSM6DSO (accelerometer/gyroscope) and LIS3MDL (magnetometer)...");
-    
+    info!("Initializing LSM6DSO (accelerometer/gyroscope)...");
+
     // Initialize LSM6DSO sensor (accelerometer and gyroscope)
-    let mut lsm6dso = match lsm6dso::Lsm6dso::new(i2c.clone(), lsm6dso::Address::default()) {
-        Ok(sensor) => {
-            info!("LSM6DSO initialized successfully");
-            sensor
-        }
-        Err(e) => {
-            error!("Failed to initialize LSM6DSO: {:?}", e);
-            panic!("LSM6DSO initialization failed");
-        }
-    };
+    // Default I2C address for LSM6DSO depends on SDO/SA0 pin: 0x6A or 0x6B
+    let mut lsm6dso = lsm6dso::Lsm6dso::new(i2c, 0x6B);
+    if let Err(e) = lsm6dso.check() {
+        warn!("LSM6DSO WHO_AM_I check failed: {}", defmt::Debug2Format(&e));
+    } else {
+        info!("LSM6DSO initialized successfully");
+    }
 
     // Configure LSM6DSO settings
-    if let Err(e) = lsm6dso.set_accel_scale(lsm6dso::AccelScale::G16) {
-        error!("Failed to set accelerometer scale: {:?}", e);
+    if let Err(e) = lsm6dso.set_accelerometer_scale(AccelerometerScale::G16) {
+        error!(
+            "Failed to set accelerometer scale: {}",
+            defmt::Debug2Format(&e)
+        );
     }
-    if let Err(e) = lsm6dso.set_gyro_scale(lsm6dso::GyroScale::Dps2000) {
-        error!("Failed to set gyroscope scale: {:?}", e);
+    if let Err(e) = lsm6dso.set_gyroscope_scale(GyroscopeFullScale::Dps2000) {
+        error!("Failed to set gyroscope scale: {}", defmt::Debug2Format(&e));
     }
-    if let Err(e) = lsm6dso.set_accel_data_rate(lsm6dso::AccelDataRate::Hz104) {
-        error!("Failed to set accelerometer data rate: {:?}", e);
+    if let Err(e) = lsm6dso.set_accelerometer_output(AccelerometerOutput::Rate104) {
+        error!(
+            "Failed to set accelerometer output rate: {}",
+            defmt::Debug2Format(&e)
+        );
     }
-    if let Err(e) = lsm6dso.set_gyro_data_rate(lsm6dso::GyroDataRate::Hz104) {
-        error!("Failed to set gyroscope data rate: {:?}", e);
-    }
-
-    // Initialize LIS3MDL sensor (magnetometer)
-    let mut lis3mdl = match lis3mdl::Lis3mdl::new(i2c, lis3mdl::Address::default()) {
-        Ok(sensor) => {
-            info!("LIS3MDL initialized successfully");
-            sensor
-        }
-        Err(e) => {
-            error!("Failed to initialize LIS3MDL: {:?}", e);
-            panic!("LIS3MDL initialization failed");
-        }
-    };
-
-    // Configure LIS3MDL settings
-    if let Err(e) = lis3mdl.set_scale(lis3mdl::Scale::Gauss4) {
-        error!("Failed to set magnetometer scale: {:?}", e);
-    }
-    if let Err(e) = lis3mdl.set_data_rate(lis3mdl::DataRate::Hz100) {
-        error!("Failed to set magnetometer data rate: {:?}", e);
+    if let Err(e) = lsm6dso.set_gyroscope_output(GyroscopeOutput::Rate104) {
+        error!(
+            "Failed to set gyroscope output rate: {}",
+            defmt::Debug2Format(&e)
+        );
     }
 
     info!("IMU sensors configured successfully");
@@ -188,71 +172,43 @@ fn main() -> ! {
     loop {
         // Blink LED to show activity
         led_pin.set_high().unwrap();
-        
+
         // Log sensor reading header
         info!("=== Sensor Reading #{} ===", counter);
-        
-        // Try to read accelerometer data (try multiple possible API methods)
-        match lsm6dso.accel_norm() {
-            Ok(data) => {
-                info!("Accelerometer (m/s²): X={}, Y={}, Z={}", data.x, data.y, data.z);
+
+        // Read accelerometer data (m/s^2)
+        match lsm6dso.read_accelerometer() {
+            Ok((ax, ay, az)) => {
+                info!("Accelerometer (m/s²): X={}, Y={}, Z={}", ax, ay, az);
             }
-            Err(_) => {
-                match lsm6dso.accel() {
-                    Ok(data) => {
-                        info!("Accelerometer (raw): X={}, Y={}, Z={}", data.x, data.y, data.z);
-                    }
-                    Err(e) => {
-                        error!("Failed to read accelerometer data: {:?}", e);
-                    }
-                }
+            Err(e) => {
+                error!(
+                    "Failed to read accelerometer data: {}",
+                    defmt::Debug2Format(&e)
+                );
             }
         }
 
-        // Try to read gyroscope data (try multiple possible API methods)
-        match lsm6dso.gyro_norm() {
-            Ok(data) => {
-                info!("Gyroscope (rad/s): X={}, Y={}, Z={}", data.x, data.y, data.z);
+        // Read gyroscope data (rad/s)
+        match lsm6dso.read_gyro() {
+            Ok((gx, gy, gz)) => {
+                info!("Gyroscope (rad/s): X={}, Y={}, Z={}", gx, gy, gz);
             }
-            Err(_) => {
-                match lsm6dso.gyro() {
-                    Ok(data) => {
-                        info!("Gyroscope (raw): X={}, Y={}, Z={}", data.x, data.y, data.z);
-                    }
-                    Err(e) => {
-                        error!("Failed to read gyroscope data: {:?}", e);
-                    }
-                }
+            Err(e) => {
+                error!("Failed to read gyroscope data: {}", defmt::Debug2Format(&e));
             }
         }
 
-        // Try to read magnetometer data (try multiple possible API methods)
-        match lis3mdl.mag_norm() {
-            Ok(data) => {
-                info!("Magnetometer (Gauss): X={}, Y={}, Z={}", data.x, data.y, data.z);
-            }
-            Err(_) => {
-                match lis3mdl.mag() {
-                    Ok(data) => {
-                        info!("Magnetometer (raw): X={}, Y={}, Z={}", data.x, data.y, data.z);
-                    }
-                    Err(e) => {
-                        error!("Failed to read magnetometer data: {:?}", e);
-                    }
-                }
-            }
-        }
-        
         info!("");
 
         delay.delay_ms(100);
         led_pin.set_low().unwrap();
-        
+
         // Wait before next reading (total cycle time ~1 second)
         delay.delay_ms(900);
-        
+
         counter = counter.wrapping_add(1);
-        
+
         // Send periodic status message
         if counter % 10 == 0 {
             info!("Status: {} sensor readings completed", counter);
