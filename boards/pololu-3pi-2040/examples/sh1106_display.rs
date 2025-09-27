@@ -8,11 +8,11 @@
 //! - SH1106 GND -> GND  
 //! - SH1106 SCK -> GPIO2 (display_sck)
 //! - SH1106 MOSI -> GPIO3 (rgb_led_display_data)
-//! - SH1106 DC -> GPIO0 (button_c)
-//! - SH1106 CS -> GPIO1 (unused pin, can be tied to GND)
-//! - SH1106 RES -> GPIO25 (led pin, can be reconfigured)
-//!
-//! See the `Cargo.toml` file for Copyright and license details.
+//! - SH1106 DC -> GPIO0 (button_c_display_dc)
+//! - SH1106 RES -> GPIO1 (display_reset)
+
+//! Note: CS is attached to the screen and is pulled to GND on the board by default, ie no need to
+//! drive the pin
 
 #![no_std]
 #![no_main]
