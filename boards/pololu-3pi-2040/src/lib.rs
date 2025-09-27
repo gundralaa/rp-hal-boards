@@ -68,7 +68,10 @@ pub static BOOT2_FIRMWARE: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 pub use hal::pac;
 
 hal::bsp_pins!(
-    Gpio0 { name: button_c },
+    Gpio0 { name: button_c_display_dc },
+
+    Gpio1 { name: display_reset },
+
     Gpio2 {
         name: display_sck,
         aliases: { FunctionSpi, PullNone: Gp2Spi0Sck }
