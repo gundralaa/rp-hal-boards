@@ -1,8 +1,7 @@
 //! # Pololu 3pi+ 2040 SH1106 OLED Display Example
 //!
 //! This example demonstrates how to use an SH1106 OLED display with the Pololu 3pi+ 2040 robot.
-//! The display shows robot status information including motor directions, encoder values,
-//! and line sensor readings.
+//! The display shows a simple counter that increments periodically.
 //!
 //! Hardware Connections:
 //! - SH1106 VCC -> 3.3V
@@ -26,13 +25,12 @@ use embedded_graphics::{
     text::Text,
 };
 use embedded_hal::digital::OutputPin;
-use embedded_hal::pwm::SetDutyCycle;
+use fugit::RateExtU32;
 use panic_halt as _;
-use pololu_3pi_2040::hal::prelude::*;
-use pololu_3pi_2040::hal::pac;
 use pololu_3pi_2040::hal;
-use sh1106::{prelude::*, Builder};
-use display_interface_spi::SPIInterface;
+use pololu_3pi_2040::hal::pac;
+use pololu_3pi_2040::hal::prelude::*;
+use sh1106::Builder;
 
 // For logging
 use defmt::*;
@@ -77,56 +75,39 @@ fn main() -> ! {
 
     // Configure SPI for SH1106 display
     let spi_sck = pins.display_sck.into_function::<hal::gpio::FunctionSpi>();
-    let spi_mosi = pins.rgb_led_display_data.into_function::<hal::gpio::FunctionSpi>();
-    let dc_pin = pins.button_c.into_push_pull_output();
-    let cs_pin = pins.led.into_push_pull_output(); // Using LED pin as CS
-    let res_pin = pins.led.into_push_pull_output(); // Using LED pin as RES
+    let spi_mosi = pins
+        .rgb_led_display_data
+        .into_function::<hal::gpio::FunctionSpi>();
+    let dc_pin = pins.button_c_display_dc.into_push_pull_output();
+    let mut reset_pin = pins.display_reset.into_push_pull_output(); // Using bump_emitter pin as CS
 
     // Initialize SPI
     let spi = hal::Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_sck));
     let spi = spi.init(
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
-        10.MHz(),
+        20_000_000u32.Hz(),
         embedded_hal::spi::MODE_0,
     );
 
-    // Create display interface
-    let interface = SPIInterface::new(spi, dc_pin, cs_pin);
-
     // Initialize SH1106 display
-    let mut display = Builder::new()
-        .size(DisplaySize::Display128x64)
-        .connect_spi(interface)
+    let mut display: sh1106::mode::GraphicsMode<_> = Builder::new()
+        .connect_spi(spi, dc_pin, sh1106::builder::NoOutputPin::new())
         .into();
 
-    // Reset display
-    res_pin.set_low().unwrap();
-    delay.delay_ms(10);
-    res_pin.set_high().unwrap();
-    delay.delay_ms(10);
-
     // Initialize display
-    display.init().unwrap();
+    reset_pin.set_low().unwrap();
+    delay.delay_us(10);
+    reset_pin.set_high().unwrap();
+    delay.delay_us(10);
 
-    // Configure motors
-    let mut pwm_slices = hal::pwm::Slices::new(pac.PWM, &mut pac.RESETS);
-    let pwm = &mut pwm_slices.pwm7;
-    pwm.set_div_int(10u8);
-    pwm.set_div_frac(0u8);
-    pwm.enable();
-    let channel_right = &mut pwm.channel_a;
-    channel_right.output_to(pins.right_motor_pwm);
-    let channel_left = &mut pwm.channel_b;
-    channel_left.output_to(pins.left_motor_pwm);
-    let mut direction_right = pins.right_motor_dir.into_push_pull_output();
-    let mut direction_left = pins.left_motor_dir.into_push_pull_output();
+    display.init().unwrap();
+    display.flush().unwrap();
 
     // Create text style
     let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
-    // Motor state tracking
-    let mut motor_state = 0;
+    // Counter for display
     let mut counter = 0;
 
     info!("Starting SH1106 display demo on Pololu 3pi+ 2040");
@@ -135,70 +116,45 @@ fn main() -> ! {
         // Clear display
         display.clear();
 
-        // Display robot status
-        Text::new("Pololu 3pi+ 2040", Point::new(0, 10), text_style)
-            .draw(&mut display)
-            .unwrap();
-
         Text::new("SH1106 Display Demo", Point::new(0, 20), text_style)
             .draw(&mut display)
             .unwrap();
 
-        // Display motor state
-        let motor_text = match motor_state {
-            0 => "Motors: Forward",
-            1 => "Motors: Backward", 
-            2 => "Motors: Stop",
-            _ => "Motors: Unknown",
-        };
-        Text::new(motor_text, Point::new(0, 30), text_style)
-            .draw(&mut display)
-            .unwrap();
-
         // Display counter
-        let counter_text = format!("Counter: {}", counter);
-        Text::new(&counter_text, Point::new(0, 40), text_style)
+        Text::new("COUNTER: ", Point::new(0, 30), text_style)
             .draw(&mut display)
             .unwrap();
 
-        // Display line sensor info
-        Text::new("Line sensors active", Point::new(0, 50), text_style)
+        // Simple number formatting for no_std environment
+        let mut buffer = [0u8; 10];
+        let mut num = counter;
+        let mut i = 0;
+
+        if num == 0 {
+            buffer[i] = b'0';
+            i += 1;
+        } else {
+            while num > 0 && i < 10 {
+                buffer[9 - i] = b'0' + (num % 10) as u8;
+                num /= 10;
+                i += 1;
+            }
+        }
+
+        // Display the counter number
+        let counter_num_text = core::str::from_utf8(&buffer[10 - i..10]).unwrap();
+        Text::new(counter_num_text, Point::new(60, 30), text_style)
             .draw(&mut display)
             .unwrap();
 
         // Update display
         display.flush().unwrap();
 
-        // Control motors based on state
-        match motor_state {
-            0 => {
-                // Forward
-                direction_right.set_high().unwrap();
-                direction_left.set_high().unwrap();
-                channel_right.set_duty_cycle(0x4FFF).unwrap();
-                channel_left.set_duty_cycle(0x4FFF).unwrap();
-            }
-            1 => {
-                // Backward
-                direction_right.set_low().unwrap();
-                direction_left.set_low().unwrap();
-                channel_right.set_duty_cycle(0x4FFF).unwrap();
-                channel_left.set_duty_cycle(0x4FFF).unwrap();
-            }
-            2 => {
-                // Stop
-                channel_right.set_duty_cycle(0x0000).unwrap();
-                channel_left.set_duty_cycle(0x0000).unwrap();
-            }
-            _ => {}
-        }
-
-        // Update state every 2 seconds
+        // Increment counter every 2 seconds
         delay.delay_ms(2000);
-        motor_state = (motor_state + 1) % 3;
         counter += 1;
 
-        info!("Motor state: {}, Counter: {}", motor_state, counter);
+        info!("Counter: {}", counter);
     }
 }
 
