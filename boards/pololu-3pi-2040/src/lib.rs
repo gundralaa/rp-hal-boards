@@ -186,3 +186,6 @@ hal::bsp_pins!(
 );
 
 pub const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
+
+/// Line sensors HAL (QTR-style reflectance sensors on the 3pi+ 2040)
+pub mod line_sensors;
