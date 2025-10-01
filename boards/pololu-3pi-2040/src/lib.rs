@@ -186,3 +186,5 @@ hal::bsp_pins!(
 );
 
 pub const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
+
+pub mod motor;
